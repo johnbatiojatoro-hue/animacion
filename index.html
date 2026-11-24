@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Partículas que siguen el mouse</title>
+
+  <style>
+    /* ---------- Estilos (CSS) ---------- */
+    :root {
+      --fondo: #0a1024;          /* azul noche */
+      --texto: #9fb0d6;          /* azul grisáceo claro */
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body {
+      height: 100%;
+      overflow: hidden;
+      background: var(--fondo);
+    }
+
+    /* El lienzo ocupa toda la pantalla y queda detrás del texto */
+    #lienzo {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      touch-action: none;        /* evita que el dedo haga scroll en celulares */
+      cursor: crosshair;
+    }
+
+    .pista {
+      position: fixed;
+      left: 50%;
+      bottom: 28px;
+      transform: translateX(-50%);
+      font: 400 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+      color: var(--texto);
+      text-align: center;
+      pointer-events: none;      /* el texto no bloquea el mouse */
+      transition: opacity .8s ease;
+    }
+    .pista.oculta { opacity: 0; }
+  </style>
+</head>
+
+<body>
+  <canvas id="lienzo"></canvas>
+  <p class="pista" id="pista">Mueve el mouse. Haz clic para dispersar las partículas.</p>
+
+  <script>
+    /* ---------- Lógica (JavaScript) ----------
+       CSS por sí solo no puede leer la posición del mouse,
+       por eso se usa un poco de JavaScript para eso.        */
+
+    const lienzo = document.getElementById('lienzo');
+    const ctx    = lienzo.getContext('2d');
+    const pista  = document.getElementById('pista');
+
+    const FONDO = '10, 16, 36';                 // mismo color que --fondo (RGB)
+    const reducirMovimiento =
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const CANTIDAD   = reducirMovimiento ? 50 : 130;   // número de partículas
+    const DIST_LINEA = 75;                             // distancia máxima para unir partículas
+
+    let ancho, alto;
+    const particulas = [];
+
+    // Posición real del mouse y posición "suavizada" (la que siguen las partículas)
+    const mouse = { x: 0, y: 0, activo: false };
+    const suave = { x: 0, y: 0 };
+
+    /* Ajusta el lienzo al tamaño de la ventana (y a pantallas retina) */
+    function ajustarLienzo() {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      ancho = window.innerWidth;
+      alto  = window.innerHeight;
+      lienzo.width  = ancho * dpr;
+      lienzo.height = alto  * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    /* Cada partícula orbita a una distancia propia alrededor del mouse */
+    class Particula {
+      constructor() {
+        this.x = Math.random() * ancho;
+        this.y = Math.random() * alto;
+        this.vx = 0;
+        this.vy = 0;
+        this.radio = 1.4 + Math.random() * 2.2;          // tamaño del punto
+        this.orbita = 18 + Math.random() * 110;          // distancia al mouse
+        this.angulo = Math.random() * Math.PI * 2;
+        this.giro = (Math.random() < 0.5 ? -1 : 1) * (0.006 + Math.random() * 0.02);
+        this.fuerza = 0.012 + Math.random() * 0.03;      // qué tan rápido lo sigue
+        this.tono = 175 + Math.random() * 100;           // de turquesa a violeta
+      }
+
+      mover() {
+        if (mouse.activo) {
+          // Objetivo: un punto en órbita alrededor del mouse
+          this.angulo += this.giro;
+          const objetivoX = suave.x + Math.cos(this.angulo) * this.orbita;
+          const objetivoY = suave.y + Math.sin(this.angulo) * this.orbita;
+          // Efecto resorte: acelera hacia el objetivo
+          this.vx += (objetivoX - this.x) * this.fuerza;
+          this.vy += (objetivoY - this.y) * this.fuerza;
+          this.vx *= 0.86;    // fricción
+          this.vy *= 0.86;
+        } else {
+          // Sin mouse: deriva suave por la pantalla
+          this.vx += (Math.random() - 0.5) * 0.06;
+          this.vy += (Math.random() - 0.5) * 0.06;
+          this.vx *= 0.97;
+          this.vy *= 0.97;
+        }
+
+        this.x += this.vx;
+        this.y += this.vy;
+
+        // Rebotan en los bordes
+        if (this.x < 0)    { this.x = 0;    this.vx *= -1; }
+        if (this.x > ancho){ this.x = ancho; this.vx *= -1; }
+        if (this.y < 0)    { this.y = 0;    this.vy *= -1; }
+        if (this.y > alto) { this.y = alto;  this.vy *= -1; }
+      }
+
+      dibujar() {
+        // Halo tenue alrededor de cada punto (menos opaco y menos claro)
+        const g = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radio * 3);
+        g.addColorStop(0, `hsla(${this.tono}, 60%, 58%, 0.55)`);
+        g.addColorStop(1, `hsla(${this.tono}, 60%, 50%, 0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radio * 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    /* Dibuja líneas entre partículas cercanas */
+    function conectar() {
+      for (let i = 0; i < particulas.length; i++) {
+        for (let j = i + 1; j < particulas.length; j++) {
+          const dx = particulas[i].x - particulas[j].x;
+          const dy = particulas[i].y - particulas[j].y;
+          const d  = Math.hypot(dx, dy);
+          if (d < DIST_LINEA) {
+            const opacidad = (1 - d / DIST_LINEA) * 0.2;
+            ctx.strokeStyle = `hsla(${particulas[i].tono}, 55%, 60%, ${opacidad})`;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(particulas[i].x, particulas[i].y);
+            ctx.lineTo(particulas[j].x, particulas[j].y);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+
+    /* Bucle de animación: se ejecuta ~60 veces por segundo */
+    function animar() {
+      // Velo semitransparente: deja una estela detrás de las partículas
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = `rgba(${FONDO}, ${reducirMovimiento ? 1 : 0.22})`;
+      ctx.fillRect(0, 0, ancho, alto);
+
+      // 'source-over' no suma luz al superponerse (con 'lighter' brillaría mucho más)
+      ctx.globalCompositeOperation = 'source-over';
+
+      // La posición suavizada se acerca poco a poco al mouse
+      suave.x += (mouse.x - suave.x) * 0.15;
+      suave.y += (mouse.y - suave.y) * 0.15;
+
+      for (const p of particulas) p.mover();
+      conectar();
+      for (const p of particulas) p.dibujar();
+
+      requestAnimationFrame(animar);
+    }
+
+    /* Explosión al hacer clic: empuja las partículas lejos del cursor */
+    function dispersar(x, y) {
+      for (const p of particulas) {
+        const ang = Math.atan2(p.y - y, p.x - x);
+        const impulso = 6 + Math.random() * 10;
+        p.vx += Math.cos(ang) * impulso;
+        p.vy += Math.sin(ang) * impulso;
+      }
+    }
+
+    /* ---------- Eventos ---------- */
+    // 'pointer' funciona igual con mouse, dedo y lápiz
+    lienzo.addEventListener('pointermove', (e) => {
+      if (!mouse.activo) { suave.x = e.clientX; suave.y = e.clientY; }
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+      mouse.activo = true;
+      pista.classList.add('oculta');
+    });
+
+    lienzo.addEventListener('pointerleave', () => { mouse.activo = false; });
+    lienzo.addEventListener('pointerdown', (e) => dispersar(e.clientX, e.clientY));
+    window.addEventListener('resize', ajustarLienzo);
+
+    /* ---------- Inicio ---------- */
+    ajustarLienzo();
+    for (let i = 0; i < CANTIDAD; i++) particulas.push(new Particula());
+    animar();
+  </script>
+</body>
+</html>
